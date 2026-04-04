@@ -32,13 +32,12 @@ SWIFT_BINARY = os.path.join(SCRIPT_DIR, "pdf-text-extract")
 OCR_BINARY = os.path.join(SCRIPT_DIR, "pdf-ocr")
 LOG_FILE = os.path.join(SCRIPT_DIR, "ai-rename.log")
 
-# Logging
-logging.basicConfig(
-    filename=LOG_FILE,
-    level=logging.DEBUG,
-    format="%(asctime)s %(levelname)s %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
+# Logging (max 1 MB, keeps 1 old backup)
+from logging.handlers import RotatingFileHandler
+_handler = RotatingFileHandler(LOG_FILE, maxBytes=1_000_000, backupCount=1)
+_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+logging.getLogger().addHandler(_handler)
+logging.getLogger().setLevel(logging.DEBUG)
 
 
 def notify(title, message):
