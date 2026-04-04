@@ -1,0 +1,4 @@
+*.log
+pdf-text-extract
+pdf-ocr
+__pycache__/
