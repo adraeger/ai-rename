@@ -31,6 +31,9 @@ SCAN_WORD_THRESHOLD = 0.3
 SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
 SWIFT_BINARY = os.path.join(SCRIPT_DIR, "pdf-text-extract")
 OCR_BINARY = os.path.join(SCRIPT_DIR, "pdf-ocr")
+OCR_BINARY_VERSION = "v2-layout"
+LAYOUT_MAX_ITEMS = 8
+LAYOUT_MIN_REL_HEIGHT = 0.015
 LOG_FILE = os.path.join(SCRIPT_DIR, "ai-rename.log")
 
 # Logging (max 1 MB, keeps 1 old backup)
@@ -101,25 +104,45 @@ print(doc.string ?? "")
 
 
 def compile_ocr_binary():
-    """Compile Swift binary for Vision OCR (one-time)."""
-    return compile_swift_binary("""\
+    """Compile Swift binary for Vision OCR with layout info (one-time).
+    Output: NDJSON. First line is the version marker, followed by one line per
+    observation: {"page","text","x","y","w","h","conf"}. Coordinates normalized
+    0-1, y measured from top."""
+    return compile_swift_binary(f"""\
 import Vision
 import CoreGraphics
 import Foundation
 
-guard CommandLine.arguments.count > 1 else {
+let BINARY_VERSION = "{OCR_BINARY_VERSION}"
+
+if CommandLine.arguments.count > 1 && CommandLine.arguments[1] == "--version" {{
+    print(BINARY_VERSION)
+    exit(0)
+}}
+
+guard CommandLine.arguments.count > 1 else {{
     fputs("Usage: pdf-ocr <file.pdf>\\n", stderr)
     exit(1)
-}
+}}
 
 let url = URL(fileURLWithPath: CommandLine.arguments[1]) as CFURL
-guard let doc = CGPDFDocument(url) else {
+guard let doc = CGPDFDocument(url) else {{
     fputs("Cannot open PDF\\n", stderr)
     exit(1)
-}
+}}
 
-for pageNum in 1...doc.numberOfPages {
-    guard let page = doc.page(at: pageNum) else { continue }
+func emitJSON(_ obj: [String: Any]) {{
+    if let data = try? JSONSerialization.data(withJSONObject: obj, options: []),
+       let s = String(data: data, encoding: .utf8) {{
+        print(s)
+    }}
+}}
+
+// Version marker
+emitJSON(["_version": BINARY_VERSION])
+
+for pageNum in 1...doc.numberOfPages {{
+    guard let page = doc.page(at: pageNum) else {{ continue }}
 
     let box = page.getBoxRect(.mediaBox)
     let scale: CGFloat = 3.0
@@ -131,14 +154,14 @@ for pageNum in 1...doc.numberOfPages {
                              bitsPerComponent: 8, bytesPerRow: 0,
                              space: cs,
                              bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue)
-    else { continue }
+    else {{ continue }}
 
     ctx.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
     ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
     ctx.scaleBy(x: scale, y: scale)
     ctx.drawPDFPage(page)
 
-    guard let image = ctx.makeImage() else { continue }
+    guard let image = ctx.makeImage() else {{ continue }}
 
     let request = VNRecognizeTextRequest()
     request.recognitionLevel = .accurate
@@ -147,21 +170,56 @@ for pageNum in 1...doc.numberOfPages {
     request.minimumTextHeight = 0.0
 
     let handler = VNImageRequestHandler(cgImage: image)
-    do {
+    do {{
         try handler.perform([request])
-    } catch {
+    }} catch {{
         fputs("OCR error page \\(pageNum): \\(error)\\n", stderr)
         continue
-    }
+    }}
 
-    guard let results = request.results else { continue }
-    for obs in results {
-        if let text = obs.topCandidates(1).first?.string {
-            print(text)
-        }
-    }
-}
+    guard let results = request.results else {{ continue }}
+    for obs in results {{
+        guard let candidate = obs.topCandidates(1).first else {{ continue }}
+        let bb = obs.boundingBox
+        // Vision coords: origin bottom-left, normalized 0-1.
+        // Flip Y so 0 = top for more intuitive prompt consumption.
+        let yFromTop = 1.0 - bb.origin.y - bb.size.height
+        emitJSON([
+            "page": pageNum,
+            "text": candidate.string,
+            "x": Double(bb.origin.x),
+            "y": Double(yFromTop),
+            "w": Double(bb.size.width),
+            "h": Double(bb.size.height),
+            "conf": Double(candidate.confidence),
+        ])
+    }}
+}}
 """, OCR_BINARY, ["Vision", "CoreGraphics"])
+
+
+def ensure_ocr_binary():
+    """Ensure the OCR binary exists AND matches OCR_BINARY_VERSION.
+    Recompiles if missing or version mismatch (e.g. upgrading from old binary)."""
+    if os.path.isfile(OCR_BINARY):
+        try:
+            r = subprocess.run(
+                [OCR_BINARY, "--version"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if r.returncode == 0 and r.stdout.strip() == OCR_BINARY_VERSION:
+                return True
+            logging.info(
+                f"OCR binary version mismatch "
+                f"(got {r.stdout.strip()!r}, need {OCR_BINARY_VERSION!r}), recompiling"
+            )
+        except (subprocess.TimeoutExpired, OSError) as e:
+            logging.info(f"OCR binary version check failed ({e}), recompiling")
+        try:
+            os.unlink(OCR_BINARY)
+        except OSError:
+            pass
+    return compile_ocr_binary()
 
 
 def is_scanned_pdf(pdf_path):
@@ -224,9 +282,54 @@ def extract_text(pdf_path):
     return ""
 
 
+def _region_tag(obs):
+    """Classify observation position into coarse layout regions for prompt."""
+    cx = obs["x"] + obs["w"] / 2
+    cy = obs["y"] + obs["h"] / 2
+    vert = "OBEN" if cy < 0.33 else ("MITTE" if cy < 0.66 else "UNTEN")
+    horz = "LINKS" if cx < 0.33 else ("MITTE" if cx < 0.66 else "RECHTS")
+    if horz == "MITTE":
+        return vert
+    return f"{vert} {horz}"
+
+
+def _build_layout_hierarchy(observations):
+    """From page-1 observations, pick the most visually prominent text blocks
+    (largest font by relative height) and format them as a compact list for the
+    prompt. Returns '' if no useful signal."""
+    page1 = [o for o in observations if o.get("page") == 1 and o.get("text", "").strip()]
+    if not page1:
+        return ""
+
+    filtered = [o for o in page1 if o["h"] >= LAYOUT_MIN_REL_HEIGHT]
+    if not filtered:
+        return ""
+
+    filtered.sort(key=lambda o: o["h"], reverse=True)
+    top = filtered[:LAYOUT_MAX_ITEMS]
+    max_h = top[0]["h"]
+
+    lines = []
+    for o in top:
+        size_ratio = o["h"] / max_h if max_h > 0 else 1.0
+        if size_ratio >= 0.85:
+            size_tag = "SEHR GROSS"
+        elif size_ratio >= 0.6:
+            size_tag = "GROSS"
+        else:
+            size_tag = "MITTEL"
+        region = _region_tag(o)
+        text = o["text"].strip().replace("\n", " ")
+        lines.append(f"- [{size_tag} / {region}] {text}")
+
+    return "\n".join(lines)
+
+
 def ocr_native(pdf_path):
-    """OCR via macOS Vision framework (VNRecognizeTextRequest)."""
-    if not compile_ocr_binary():
+    """OCR via macOS Vision framework. Parses NDJSON from the layout-aware
+    binary. Returns (fulltext, layout_hierarchy). On parse failure, returns
+    (plaintext, '') as graceful fallback."""
+    if not ensure_ocr_binary():
         raise RuntimeError("Failed to compile Vision OCR binary")
 
     logging.info(f"Starting Vision OCR: {pdf_path}")
@@ -237,12 +340,47 @@ def ocr_native(pdf_path):
     if r.returncode != 0:
         raise RuntimeError(f"Vision OCR failed: {r.stderr[:200]}")
 
-    text = r.stdout.strip()
-    logging.info(f"Vision OCR OK, {len(text)} chars")
-    return text
+    raw = r.stdout.strip()
+    if not raw:
+        return "", ""
+
+    observations = []
+    plain_lines = []
+    parse_failed = False
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            parse_failed = True
+            plain_lines.append(line)
+            continue
+        if "_version" in obj:
+            continue
+        if "text" in obj:
+            observations.append(obj)
+            plain_lines.append(obj["text"])
+
+    if parse_failed and not observations:
+        # Graceful fallback: treat entire output as plain text
+        logging.warning("OCR output is not NDJSON, falling back to plain text mode")
+        return raw, ""
+
+    # Reading order: page → top-to-bottom → left-to-right
+    observations.sort(key=lambda o: (o.get("page", 0), o["y"], o["x"]))
+    fulltext = "\n".join(o["text"] for o in observations) if observations else "\n".join(plain_lines)
+    layout = _build_layout_hierarchy(observations)
+
+    logging.info(
+        f"Vision OCR OK, {len(observations)} observations, "
+        f"{len(fulltext)} chars, layout={'yes' if layout else 'no'}"
+    )
+    return fulltext, layout
 
 
-def query_ollama(text_pdftotext, text_ocr, filename, num_predict=256):
+def query_ollama(text_pdftotext, text_ocr, filename, layout="", num_predict=256):
     """Query Ollama for date and title (chat API, thinking disabled)."""
 
     if text_pdftotext and text_ocr:
@@ -256,6 +394,16 @@ Bei Widersprüchen bevorzuge die vollständigere/klarere Version.
 {text_ocr[:MAX_TEXT_CHARS]}"""
     else:
         text_block = (text_pdftotext or text_ocr or "")[:MAX_TEXT_CHARS]
+
+    if layout:
+        layout_block = f"""
+Visuelle Hierarchie (Seite 1, geordnet nach Schriftgröße, absteigend):
+{layout}
+
+Diese Liste zeigt die prominentesten Textelemente der ersten Seite — typischerweise Absender, Briefkopf, Dokumenttitel. Nutze sie, um Absender und Dokumenttyp zuverlässig zu identifizieren, besonders wenn im Fließtext der Absender fehlt oder mehrdeutig ist.
+"""
+    else:
+        layout_block = ""
 
     prompt = f"""Analysiere diesen Dokumenttext (Rechnung, Arztrechnung, Schreiben o.ä.).
 
@@ -275,7 +423,7 @@ Antwort NUR als JSON, ohne Erklärungen:
 {{"date": "YYYY-MM-DD", "title": "Kurzer Titel"}}
 
 Dateiname: {filename}
-
+{layout_block}
 {text_block}"""
 
     logging.info(f"Sending {len(prompt)} chars to Ollama ({OLLAMA_MODEL})")
@@ -386,6 +534,7 @@ def process(filepath):
     name = os.path.basename(filepath)
     text_pdftotext = ""
     text_ocr = ""
+    layout = ""
 
     # Step 1: pdftotext (fast, accurate for digital PDFs)
     text_pdftotext = extract_text(filepath)
@@ -393,9 +542,9 @@ def process(filepath):
         logging.info("pdftotext output is scan noise, discarding")
         text_pdftotext = ""
 
-    # Step 2: Always run Vision OCR for cross-referencing
+    # Step 2: Always run Vision OCR for cross-referencing + layout hierarchy
     try:
-        text_ocr = ocr_native(filepath)
+        text_ocr, layout = ocr_native(filepath)
     except Exception as e:
         logging.error(f"Vision OCR failed: {e}")
 
@@ -405,10 +554,10 @@ def process(filepath):
 
     # Step 3: LLM extraction with retry on JSON failure
     try:
-        result = query_ollama(text_pdftotext, text_ocr, name)
+        result = query_ollama(text_pdftotext, text_ocr, name, layout=layout)
     except ValueError:
         logging.info("Retrying with higher num_predict (512)")
-        result = query_ollama(text_pdftotext, text_ocr, name, num_predict=512)
+        result = query_ollama(text_pdftotext, text_ocr, name, layout=layout, num_predict=512)
 
     date, title = result["date"], result["title"]
 
