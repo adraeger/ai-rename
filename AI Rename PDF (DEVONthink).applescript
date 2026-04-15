@@ -31,16 +31,20 @@ on performSmartRule(theRecords)
 				do shell script "/bin/rm -rf " & quoted form of tmpDir
 
 				if newFilename is "" then error "Kein neuer Dateiname erkannt"
-				if newFilename is origFilename then error "Keine Umbenennung (Datum/Titel nicht erkannt)"
 
-				-- Extension entfernen (DEVONthink haengt sie bei 'name' automatisch an)
-				if newFilename ends with ".pdf" then
-					set newName to text 1 thru -5 of newFilename
+				if newFilename is origFilename then
+					-- Dateiname war bereits korrekt — nichts zu tun, kein Fehler
+					log message "AI Rename: " & origFilename & " (bereits korrekt benannt)"
 				else
-					set newName to newFilename
-				end if
+					-- Extension entfernen (DEVONthink haengt sie bei 'name' automatisch an)
+					if newFilename ends with ".pdf" then
+						set newName to text 1 thru -5 of newFilename
+					else
+						set newName to newFilename
+					end if
 
-				set name of theRecord to newName
+					set name of theRecord to newName
+				end if
 			on error errMsg
 				log message "AI Rename Fehler: " & errMsg
 			end try

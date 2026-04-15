@@ -16,6 +16,7 @@ import urllib.error
 import tempfile
 import re
 import logging
+from datetime import datetime
 
 # Extend PATH for Quick Actions / Services (Homebrew, Swiftly)
 for p in ["/opt/homebrew/bin", "/usr/local/bin", os.path.expanduser("~/.swiftly/bin")]:
@@ -259,13 +260,19 @@ Bei Widersprüchen bevorzuge die vollständigere/klarere Version.
     prompt = f"""Analysiere diesen Dokumenttext (Rechnung, Arztrechnung, Schreiben o.ä.).
 
 Aufgabe:
-1. Finde das Dokumentdatum (Rechnungsdatum, Ausstellungsdatum) → Format YYYY-MM-TT
+1. Finde das Dokumentdatum (Rechnungsdatum, Ausstellungsdatum) → Format YYYY-MM-DD
 2. Vergib einen kurzen deutschen Titel (2-4 Wörter)
 
 Titel-Beispiele: "Beitragsrechnung DKV", "Arztrechnung Dr. Müller", "Stromrechnung EnBW", "Zahnarztrechnung", "KFZ-Versicherung HUK"
 
+Der aktuelle Dateiname (Feld "Dateiname:" unten) dient als zusätzlicher Kontext:
+- Thematische Hinweise (Absender, Dokumenttyp, Vertragsnummer) nutzen, wenn der Text mehrdeutig ist oder der Absender darin fehlt. Der Dateiname hat aber niedrigere Priorität als der Dokumenttext.
+- Enthält er ein Datum (z.B. "07042022", "07.04.2022", "2022-04-07", "220407", "Rechnung_2022-04-07"), korrekt nach YYYY-MM-DD konvertieren — aber NUR verwenden, wenn im Dokumenttext kein Datum steht.
+- Generische Teile wie "scan_001", "IMG_1234", "Dokument", "unbenannt" ignorieren.
+- Datum im Dateinamen niemals erfinden oder aus unvollständigen Fragmenten (nur Jahr, nur Monat) herleiten.
+
 Antwort NUR als JSON, ohne Erklärungen:
-{{"date": "YYYY-MM-TT", "title": "Kurzer Titel"}}
+{{"date": "YYYY-MM-DD", "title": "Kurzer Titel"}}
 
 Dateiname: {filename}
 
@@ -315,8 +322,43 @@ def valid_date(d):
     return 1900 <= y <= 2100 and 1 <= mo <= 12 and 1 <= da <= 31
 
 
+def set_file_dates(path, date_str):
+    """Set modification and creation date of the file to the document date.
+    date_str format: YYYY-MM-DD. Time is set to 12:00 local to avoid timezone
+    edge cases shifting the calendar day. Creation date uses macOS SetFile
+    (ships with Xcode Command Line Tools)."""
+    try:
+        dt = datetime.strptime(date_str, "%Y-%m-%d").replace(hour=12)
+    except ValueError:
+        logging.warning(f"set_file_dates: invalid date '{date_str}'")
+        return
+
+    ts = dt.timestamp()
+    try:
+        os.utime(path, (ts, ts))
+        logging.debug(f"mtime set to {date_str} 12:00")
+    except OSError as e:
+        logging.warning(f"os.utime failed: {e}")
+
+    setfile_date = dt.strftime("%m/%d/%Y %H:%M:%S")
+    try:
+        r = subprocess.run(
+            ["SetFile", "-d", setfile_date, path],
+            capture_output=True, text=True, timeout=5,
+        )
+        if r.returncode == 0:
+            logging.debug(f"creation date set to {date_str} 12:00")
+        else:
+            logging.warning(f"SetFile -d failed: {r.stderr[:200]}")
+    except FileNotFoundError:
+        logging.warning("SetFile not found (Xcode Command Line Tools required for creation date)")
+    except subprocess.TimeoutExpired:
+        logging.warning("SetFile timed out")
+
+
 def safe_rename(src, date, title):
-    """Rename file. Adds suffix (2), (3)... on conflicts."""
+    """Rename file. Adds suffix (2), (3)... on conflicts.
+    If the file already has the target name, returns the source path unchanged."""
     directory = os.path.dirname(src)
     ext = os.path.splitext(src)[1]
 
@@ -325,6 +367,10 @@ def safe_rename(src, date, title):
 
     base = f"{date} {title}"
     new_path = os.path.join(directory, f"{base}{ext}")
+
+    # Target path points to the source file itself (same inode) → nothing to do
+    if os.path.exists(new_path) and os.path.samefile(src, new_path):
+        return src
 
     n = 2
     while os.path.exists(new_path):
@@ -372,8 +418,12 @@ def process(filepath):
         return None
 
     new_path = safe_rename(filepath, date, title)
+    set_file_dates(new_path, date)
     new_name = os.path.basename(new_path)
-    notify("Renamed", f"{name} -> {new_name}")
+    if new_name == name:
+        notify("Bereits korrekt", name)
+    else:
+        notify("Umbenannt", f"{name} -> {new_name}")
     return new_path
 
 
@@ -392,8 +442,14 @@ def main():
         try:
             new = process(path)
             if new:
-                print(f"OK  {os.path.basename(path)} -> {os.path.basename(new)}")
-                logging.info(f"OK  {os.path.basename(path)} -> {os.path.basename(new)}")
+                old_name = os.path.basename(path)
+                new_name = os.path.basename(new)
+                if old_name == new_name:
+                    msg = f"OK  {old_name} (bereits korrekt benannt)"
+                else:
+                    msg = f"OK  {old_name} -> {new_name}"
+                print(msg)
+                logging.info(msg)
                 ok += 1
             else:
                 print(f"ERR {os.path.basename(path)}: processing failed")
