@@ -411,7 +411,27 @@ Aufgabe:
 1. Finde das Dokumentdatum (Rechnungsdatum, Ausstellungsdatum) → Format YYYY-MM-DD
 2. Vergib einen kurzen deutschen Titel (2-4 Wörter)
 
-Titel-Beispiele: "Beitragsrechnung DKV", "Arztrechnung Dr. Müller", "Stromrechnung EnBW", "Zahnarztrechnung", "KFZ-Versicherung HUK"
+Titel-Beispiele: "Beitragsrechnung DKV", "Arztrechnung Dr. Mustermann", "Stromrechnung EnBW", "Zahnarztrechnung Dr. Beispiel", "KFZ-Versicherung HUK"
+
+Bei Arzt- und Zahnarztrechnungen:
+- Der Titel soll den Namen des **behandelnden Arztes / Zahnarztes / der Praxis** enthalten, NICHT den Namen des Abrechnungsunternehmens (z.B. PVS, BFS, Medas, privadis, Ärztekasse, ZA AG, DZR). Diese sind nur Dienstleister, die im Auftrag der Praxis abrechnen. Hinweise im Text wie "Die Rechnungsstellung erfolgt im Auftrag von: ..." führen direkt zum korrekten Behandler/zur Praxis.
+- Finde den Behandler typischerweise im Briefkopf/Absender der Praxis, in Zeilen wie "Rechnung von Dr. ...", "Behandler:", "Behandelnder Arzt:", "Dres. med. ...", oder bei der Leistungsbeschreibung.
+- Bei Gemeinschaftspraxen / mehreren Ärzten: ALLE Nachnamen mit Bindestrich "-" verbinden, ohne "Dr." und ohne Vornamen.
+  * 2 Ärzte: "Arztrechnung Beispiel-Muster"
+  * 3 Ärzte: "Arztrechnung Beispiel-Muster-Test"
+  * 4 Ärzte: "Arztrechnung Eins-Zwei-Drei-Vier"
+  * NIE "& Kollegen", NIE "Gemeinschaftspraxis" als Platzhalter — immer alle Namen listen.
+- Einzelner Arzt weiterhin mit "Dr.": "Arztrechnung Dr. Mustermann", "Zahnarztrechnung Dr. Beispiel".
+- Alternativ bei klarem Praxisnamen (z.B. "Praxis am Marktplatz", "MVZ Nord", "Zahnzentrum Mitte"): "Arztrechnung Praxis am Marktplatz". Namensliste hat aber Vorrang, wenn die Ärzte klar benannt sind.
+- Ist gar kein Arzt- oder Praxisname erkennbar (nur Abrechnungsstelle), nutze den Fachbereich: "Arztrechnung Radiologie", "Zahnarztrechnung", "Laborrechnung".
+- Bei dieser Regel darf der Titel ausnahmsweise länger als 2-4 Wörter sein, wenn viele Ärzte vorkommen.
+- Beispiele: "Arztrechnung Dr. Mustermann", "Zahnarztrechnung Dr. Beispiel", "Arztrechnung Beispiel-Muster", "Arztrechnung Eins-Zwei-Drei-Vier", "Arztrechnung Praxis am Marktplatz" — NICHT "Arztrechnung PVS", NICHT "Arztrechnung Gemeinschaftspraxis", NICHT "Arztrechnung Dr. Mustermann & Kollegen".
+
+Bei Apotheken-Quittungen und -Rechnungen:
+- Immer den Namen der Apotheke mitnennen, aus dem Briefkopf / Absender.
+- Beispiele: "Apothekenrechnung Adler-Apotheke", "Apothekenquittung Stern-Apotheke", "Apothekenrechnung Rosen-Apotheke".
+- Nicht nur "Apothekenrechnung" als Titel — die Apotheke identifiziert das Dokument eindeutig.
+- Bei Online-/Versand-Apotheken (DocMorris, Shop Apotheke, etc.) entsprechend: "Apothekenrechnung DocMorris", "Apothekenrechnung Shop Apotheke".
 
 Der aktuelle Dateiname (Feld "Dateiname:" unten) dient als zusätzlicher Kontext:
 - Thematische Hinweise (Absender, Dokumenttyp, Vertragsnummer) nutzen, wenn der Text mehrdeutig ist oder der Absender darin fehlt. Der Dateiname hat aber niedrigere Priorität als der Dokumenttext.
