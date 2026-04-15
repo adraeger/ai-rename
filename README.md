@@ -160,6 +160,29 @@ To uninstall:
 rm -rf ~/Library/Services/AI\ Rename\ PDF.workflow
 ```
 
+## DEVONthink Integration
+
+For users of [DEVONthink](https://www.devontechnologies.com/apps/devonthink), a Smart Rule AppleScript is included: `AI Rename PDF (DEVONthink).applescript`.
+
+It copies each matched record's file to a temporary directory, runs `ai-rename.py` there, then applies the resulting name to the DEVONthink record via `set name of theRecord to newName`. This way DEVONthink itself performs the actual rename — metadata, tags, UUID, and replicants stay intact for both **indexed** and **imported** items.
+
+### Setup
+
+1. In DEVONthink, scroll the sidebar down to the **Smart Rules** section (German: *Intelligente Regeln*).
+2. Right-click → **New Smart Rule…** (*Neue Intelligente Regel…*).
+3. Configure the trigger conditions, e.g.:
+   - *Kind is PDF/PS*
+   - *Tag is `ai-rename`* (or pick an inbox group)
+   - Execution: *On Import* / *On Tag Change* / *Daily*
+4. Add action **Execute Script** (*Skript ausführen*):
+   - **External**: point to `AI Rename PDF (DEVONthink).applescript`, or
+   - **Embedded**: paste the file contents.
+5. Save.
+
+To test a single record manually: right-click the PDF → **Apply Smart Rule** → pick your rule.
+
+Errors land in DEVONthink's log (*Window → Log* / *Fenster → Protokoll*).
+
 ## How It Handles Edge Cases
 
 | Scenario | Behavior |
