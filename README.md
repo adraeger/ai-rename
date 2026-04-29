@@ -154,6 +154,8 @@ cp -R "AI Rename PDF.workflow" ~/Library/Services/
 
 After that, right-click any PDF in Finder and select **AI Rename PDF** from the Quick Actions menu. Works with multiple selected files.
 
+> **Hinweis:** Falls die Quick Action nach der Installation nicht im Finder-Kontextmenü erscheint, Finder neu starten: `killall Finder`
+
 To uninstall:
 
 ```bash
